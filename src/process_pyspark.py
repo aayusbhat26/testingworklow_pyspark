@@ -46,33 +46,50 @@ def main():
     # ---------------------------------------------------------
     # 2. CREATE SILVER TABLE (DELTA)
     # ---------------------------------------------------------
-    print("Transforming Raw -> Silver...")
+    print("\n--- Transforming Raw -> Silver ---")
     silver_df = raw_df.withColumn("Status", lit("Processed into Silver"))
+    
+    print("Silver Table Schema:")
+    silver_df.printSchema()
+    print("Silver Table Data:")
+    silver_df.show()
     
     local_silver_dir = "silver_table.delta"
     print(f"Writing Silver table locally to {local_silver_dir}...")
     silver_df.write.format("delta").mode("overwrite").save(local_silver_dir)
     
+    # Print Delta Table History
+    print("Silver Delta Table History:")
+    DeltaTable.forPath(spark, local_silver_dir).history().select("version", "timestamp", "operation", "operationParameters").show(truncate=False)
+    
     silver_dest = f"hf://buckets/{hf_repo_id}/silver_table.delta"
     print(f"Uploading Silver table to {silver_dest} using sync_bucket...")
-    # Delta tables are directories, so we use sync_bucket to copy the whole folder
     sync_bucket(local_silver_dir, silver_dest, token=hf_token)
     
     # ---------------------------------------------------------
     # 3. CREATE GOLD TABLE (DELTA)
     # ---------------------------------------------------------
-    print("Transforming Silver -> Gold...")
+    print("\n--- Transforming Silver -> Gold ---")
     gold_df = silver_df.filter(col("Age") > 30).withColumn("Age_in_10_Years", col("Age") + 10)
+    
+    print("Gold Table Schema:")
+    gold_df.printSchema()
+    print("Gold Table Data:")
+    gold_df.show()
     
     local_gold_dir = "gold_table.delta"
     print(f"Writing Gold table locally to {local_gold_dir}...")
     gold_df.write.format("delta").mode("overwrite").save(local_gold_dir)
     
+    # Print Delta Table History
+    print("Gold Delta Table History:")
+    DeltaTable.forPath(spark, local_gold_dir).history().select("version", "timestamp", "operation", "operationParameters").show(truncate=False)
+    
     gold_dest = f"hf://buckets/{hf_repo_id}/gold_table.delta"
     print(f"Uploading Gold table to {gold_dest} using sync_bucket...")
     sync_bucket(local_gold_dir, gold_dest, token=hf_token)
     
-    print("Medallion pipeline complete! Silver and Gold Delta tables stored in Hugging Face Bucket.")
+    print("\nMedallion pipeline complete! Silver and Gold Delta tables stored in Hugging Face Bucket.")
     spark.stop()
 
 if __name__ == "__main__":
