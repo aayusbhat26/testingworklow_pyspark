@@ -43,6 +43,10 @@ def main():
     if hf_token and hf_repo_id:
         print(f"Uploading {local_file_path} to Hugging Face repo: {hf_repo_id}...")
         api = HfApi(token=hf_token)
+        
+        # Ensure the repository exists before uploading
+        api.create_repo(repo_id=hf_repo_id, repo_type="dataset", exist_ok=True)
+        
         api.upload_file(
             path_or_fileobj=local_file_path,
             path_in_repo="pyspark_output.json",
