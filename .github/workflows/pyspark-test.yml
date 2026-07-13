@@ -32,5 +32,8 @@ jobs:
         pip install -r requirements.txt
         
     - name: Run PySpark Script
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        HF_REPO_ID: ${{ vars.HF_REPO_ID }} # Use repository variables instead of hardcoding
       run: |
         python src/test_pyspark.py
