@@ -36,24 +36,22 @@ def main():
     local_file_path = os.path.join(output_path, json_files[0])
     print(f"Generated JSON file at: {local_file_path}")
     
-    # Upload to Hugging Face
+    # Upload to Hugging Face Bucket
     hf_token = os.environ.get("HF_TOKEN")
     hf_repo_id = os.environ.get("HF_REPO_ID")
     
     if hf_token and hf_repo_id:
-        print(f"Uploading {local_file_path} to Hugging Face repo: {hf_repo_id}...")
-        api = HfApi(token=hf_token)
+        print(f"Uploading {local_file_path} to Hugging Face Bucket: {hf_repo_id}...")
         
-        # Ensure the repository exists before uploading
-        api.create_repo(repo_id=hf_repo_id, repo_type="dataset", exist_ok=True)
+        from huggingface_hub import HfFileSystem
+        fs = HfFileSystem(token=hf_token)
         
-        api.upload_file(
-            path_or_fileobj=local_file_path,
-            path_in_repo="pyspark_output.json",
-            repo_id=hf_repo_id,
-            repo_type="dataset"
-        )
-        print("Upload to Hugging Face completed successfully!")
+        destination = f"hf://buckets/{hf_repo_id}/pyspark_output.json"
+        
+        # Upload the file directly to the bucket
+        fs.put(local_file_path, destination)
+        
+        print("Upload to Hugging Face Bucket completed successfully!")
     else:
         print("Skipping Hugging Face upload: HF_TOKEN or HF_REPO_ID environment variables are not set.")
     
