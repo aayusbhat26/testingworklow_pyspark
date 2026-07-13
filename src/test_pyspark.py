@@ -1,7 +1,8 @@
 import os
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType
-from huggingface_hub import HfApi
+import pyxet
+import fsspec
 
 def main():
     print("Starting PySpark session...")
@@ -25,10 +26,8 @@ def main():
     # Save the DataFrame to a local JSON file
     output_path = "output_data"
     print(f"Saving DataFrame to {output_path} as JSON...")
-    # coalesce(1) ensures it writes out to a single file instead of partitioning
     df.coalesce(1).write.mode("overwrite").json(output_path)
     
-    # PySpark writes inside a directory, let's find the actual .json file
     json_files = [f for f in os.listdir(output_path) if f.endswith(".json")]
     if not json_files:
         raise Exception("No JSON file found in output directory.")
@@ -36,26 +35,28 @@ def main():
     local_file_path = os.path.join(output_path, json_files[0])
     print(f"Generated JSON file at: {local_file_path}")
     
-    # Upload to Hugging Face
-    hf_token = os.environ.get("HF_TOKEN")
-    hf_repo_id = os.environ.get("HF_REPO_ID")
+    # Upload to XetHub (Bucket)
+    xet_user = os.environ.get("XET_USER_NAME")
+    xet_token = os.environ.get("XET_USER_TOKEN")
+    xet_repo = os.environ.get("XET_REPO_ID")
     
-    if hf_token and hf_repo_id:
-        print(f"Uploading {local_file_path} to Hugging Face repo: {hf_repo_id}...")
-        api = HfApi(token=hf_token)
+    if xet_user and xet_token and xet_repo:
+        print(f"Uploading {local_file_path} to XetHub bucket: {xet_repo}...")
         
-        # Ensure the repository exists before uploading
-        api.create_repo(repo_id=hf_repo_id, repo_type="dataset", exist_ok=True)
+        # Authenticate with XetHub
+        pyxet.login(user=xet_user, token=xet_token)
         
-        api.upload_file(
-            path_or_fileobj=local_file_path,
-            path_in_repo="pyspark_output.json",
-            repo_id=hf_repo_id,
-            repo_type="dataset"
-        )
-        print("Upload to Hugging Face completed successfully!")
+        # XetHub path format: xet://username/repo/branch/filename
+        destination = f"xet://{xet_repo}/main/pyspark_output.json"
+        
+        # Upload using fsspec
+        with fsspec.open(destination, 'wb') as f_dest:
+            with open(local_file_path, 'rb') as f_source:
+                f_dest.write(f_source.read())
+                
+        print("Upload to XetHub completed successfully!")
     else:
-        print("Skipping Hugging Face upload: HF_TOKEN or HF_REPO_ID environment variables are not set.")
+        print("Skipping XetHub upload: XET_USER_NAME, XET_USER_TOKEN, or XET_REPO_ID environment variables are not set.")
     
     print("PySpark test completed successfully.")
     spark.stop()
