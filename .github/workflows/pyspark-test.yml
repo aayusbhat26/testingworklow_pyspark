@@ -33,8 +33,7 @@ jobs:
         
     - name: Run PySpark Script
       env:
-        XET_USER_NAME: ${{ secrets.XET_USER_NAME }}
-        XET_USER_TOKEN: ${{ secrets.XET_USER_TOKEN }}
-        XET_REPO_ID: ${{ vars.XET_REPO_ID }}
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        HF_REPO_ID: ${{ vars.HF_REPO_ID }} # Use repository variables instead of hardcoding
       run: |
         python src/test_pyspark.py
