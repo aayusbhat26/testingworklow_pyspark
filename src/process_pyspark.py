@@ -1,15 +1,21 @@
 import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit
-from huggingface_hub import HfFileSystem
+from huggingface_hub import HfFileSystem, sync_bucket
+from delta import *
 
 def main():
-    print("Starting PySpark Transformation Session...")
-    # Initialize PySpark
-    spark = SparkSession.builder \
+    print("Starting PySpark Medallion Transformation Session (Delta Lake)...")
+    
+    # Initialize PySpark with Delta Lake configurations
+    builder = SparkSession.builder \
         .appName("GitHubActionPySparkProcess") \
         .master("local[*]") \
-        .getOrCreate()
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+
+    # configure_spark_with_delta_pip helps to inject delta-spark dependencies
+    spark = configure_spark_with_delta_pip(builder).getOrCreate()
         
     hf_token = os.environ.get("HF_TOKEN")
     hf_repo_id = os.environ.get("HF_REPO_ID") # e.g., aayushbhat26/testBucket
@@ -20,53 +26,53 @@ def main():
     fs = HfFileSystem(token=hf_token)
     
     # ---------------------------------------------------------
-    # 1. FETCH DATA FROM HUGGING FACE BUCKET
+    # 1. READ RAW DATA (JSON)
     # ---------------------------------------------------------
     source_bucket_path = f"hf://buckets/{hf_repo_id}/pyspark_output.json"
-    local_input_path = "downloaded_data.json"
+    local_input_path = "raw_data.json"
     
-    print(f"Downloading data from {source_bucket_path}...")
-    fs.get(source_bucket_path, local_input_path)
-    print("Download complete.")
-    
-    # ---------------------------------------------------------
-    # 2. READ & TRANSFORM DATA WITH PYSPARK
-    # ---------------------------------------------------------
-    print("Loading data into PySpark DataFrame...")
-    df = spark.read.json(local_input_path)
-    
-    print("Original Data (Fetched from Hugging Face):")
-    df.show()
-    
-    print("Applying Transformations...")
-    # Example Transformation: Add a column and filter out rows
-    transformed_df = df.withColumn("Age_in_10_Years", col("Age") + 10) \
-                       .withColumn("Status", lit("Processed by GitHub Actions")) \
-                       .filter(col("Age") > 30)
-                       
-    print("Transformed Data:")
-    transformed_df.show()
+    print(f"Downloading raw JSON data from {source_bucket_path}...")
+    try:
+        fs.get(source_bucket_path, local_input_path)
+    except FileNotFoundError:
+        print("Warning: pyspark_output.json not found, using dummy data instead.")
+        with open(local_input_path, 'w') as f:
+            f.write('{"Name":"Alice","Age":34}\n{"Name":"Bob","Age":45}\n{"Name":"Charlie","Age":28}\n')
+
+    raw_df = spark.read.json(local_input_path)
+    print("Raw Data (Bronze):")
+    raw_df.show()
     
     # ---------------------------------------------------------
-    # 3. SAVE TRANSFORMED DATA LOCALLY
+    # 2. CREATE SILVER TABLE (DELTA)
     # ---------------------------------------------------------
-    output_dir = "transformed_data"
-    print(f"Saving transformed data to {output_dir}...")
-    transformed_df.coalesce(1).write.mode("overwrite").json(output_dir)
+    print("Transforming Raw -> Silver...")
+    silver_df = raw_df.withColumn("Status", lit("Processed into Silver"))
     
-    # Find the newly generated JSON file
-    json_files = [f for f in os.listdir(output_dir) if f.endswith(".json")]
-    local_output_path = os.path.join(output_dir, json_files[0])
+    local_silver_dir = "silver_table.delta"
+    print(f"Writing Silver table locally to {local_silver_dir}...")
+    silver_df.write.format("delta").mode("overwrite").save(local_silver_dir)
+    
+    silver_dest = f"hf://buckets/{hf_repo_id}/silver_table.delta"
+    print(f"Uploading Silver table to {silver_dest} using sync_bucket...")
+    # Delta tables are directories, so we use sync_bucket to copy the whole folder
+    sync_bucket(local_silver_dir, silver_dest, token=hf_token)
     
     # ---------------------------------------------------------
-    # 4. UPLOAD BACK TO HUGGING FACE BUCKET
+    # 3. CREATE GOLD TABLE (DELTA)
     # ---------------------------------------------------------
-    destination_bucket_path = f"hf://buckets/{hf_repo_id}/transformed_output.json"
-    print(f"Uploading transformed data back to {destination_bucket_path}...")
+    print("Transforming Silver -> Gold...")
+    gold_df = silver_df.filter(col("Age") > 30).withColumn("Age_in_10_Years", col("Age") + 10)
     
-    fs.put(local_output_path, destination_bucket_path)
+    local_gold_dir = "gold_table.delta"
+    print(f"Writing Gold table locally to {local_gold_dir}...")
+    gold_df.write.format("delta").mode("overwrite").save(local_gold_dir)
     
-    print("Process complete! Transformed data successfully stored back into the Hugging Face Bucket.")
+    gold_dest = f"hf://buckets/{hf_repo_id}/gold_table.delta"
+    print(f"Uploading Gold table to {gold_dest} using sync_bucket...")
+    sync_bucket(local_gold_dir, gold_dest, token=hf_token)
+    
+    print("Medallion pipeline complete! Silver and Gold Delta tables stored in Hugging Face Bucket.")
     spark.stop()
 
 if __name__ == "__main__":
